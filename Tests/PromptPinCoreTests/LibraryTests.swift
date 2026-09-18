@@ -72,4 +72,30 @@ final class LibraryTests {
         try expectThrows(try disk.save(invalid))
         try expectEqual(try disk.load(), original)
     }
+    func testLegacyFileWithoutCredentialKeysDecodesWithEmptyLists() throws {
+        let disk = try temporaryDisk()
+        var json = try JSONSerialization.jsonObject(with: disk.encode(.starter)) as! [String: Any]
+        json.removeValue(forKey: "accounts")
+        json.removeValue(forKey: "secrets")
+        try JSONSerialization.data(withJSONObject: json).write(to: disk.file)
+        let loaded = try expectNotNil(try disk.load())
+        try expectTrue(loaded.accounts.isEmpty && loaded.secrets.isEmpty)
+        try expectEqual(loaded.prompts.count, Library.starter.prompts.count)
+    }
+    func testCredentialsPersistRoundTripAndValidate() throws {
+        let disk = try temporaryDisk()
+        let account = AccountCredential(title: "云控制台", mainAccount: "ops@example.com", subAccount: "deploy-bot", password: "p@ss 密码")
+        let secret = SecretRecord(kind: .apiKey, title: "大模型", model: "gpt-4o", apiKey: "sk-test", baseURL: "https://api.example.com/v1")
+        var library = Library(projects: [], prompts: [])
+        library.accounts = [account]; library.secrets = [secret]
+        try disk.save(library)
+        try expectEqual(try LibraryDisk(directory: disk.directory).load(), library)
+        var broken = library
+        broken.secrets[0].apiKey = "  \n"
+        try expectThrows(try disk.save(broken))
+        var incomplete = library
+        incomplete.secrets.append(SecretRecord(kind: .accessKeys, title: "缺 SK", accessKey: "AKID"))
+        try expectThrows(try disk.save(incomplete))
+        try expectEqual(try disk.load(), library)
+    }
 }

@@ -24,13 +24,14 @@ import PromptPinCore
         do { try disk.save(next); library = next; return true }
         catch { self.error = "保存失败，修改尚未保存：\(error.localizedDescription)"; return false }
     }
-    func copy(_ prompt: Prompt) -> Bool {
+    @discardableResult func copyText(_ text: String) -> Bool {
         NSPasteboard.general.clearContents()
-        guard NSPasteboard.general.setString(prompt.body, forType: .string) else {
+        guard NSPasteboard.general.setString(text, forType: .string) else {
             error = "无法写入剪贴板，请重试。"; return false
         }
         return true
     }
+    @discardableResult func copy(_ prompt: Prompt) -> Bool { copyText(prompt.body) }
     func exportLibrary() {
         holdOpen?(true); defer { holdOpen?(false) }
         let panel = NSSavePanel()
@@ -49,12 +50,22 @@ import PromptPinCore
             let incoming = try disk.decode(Data(contentsOf: url))
             // Merge by identity: preserve current edits, add only unseen records.
             let oldIDs = Set(library.prompts.map(\.id))
+            let oldAccountIDs = Set(library.accounts.map(\.id))
+            let oldSecretIDs = Set(library.secrets.map(\.id))
             let added = incoming.prompts.filter { !oldIDs.contains($0.id) }.count
+            let credentialCount = incoming.accounts.filter { !oldAccountIDs.contains($0.id) }.count
+                + incoming.secrets.filter { !oldSecretIDs.contains($0.id) }.count
             if update({ current in
                 let projectIDs = Set(current.projects.map(\.id))
                 current.projects += incoming.projects.filter { !projectIDs.contains($0.id) }
                 current.prompts += incoming.prompts.filter { !oldIDs.contains($0.id) }
-            }) { notice = "已导入 \(added) 条提示词，现有内容保留" }
+                current.accounts += incoming.accounts.filter { !oldAccountIDs.contains($0.id) }
+                current.secrets += incoming.secrets.filter { !oldSecretIDs.contains($0.id) }
+            }) {
+                notice = credentialCount > 0
+                    ? "已导入 \(added) 条提示词、\(credentialCount) 条账号密钥，现有内容保留"
+                    : "已导入 \(added) 条提示词，现有内容保留"
+            }
         } catch { self.error = "导入失败：\(error.localizedDescription)" }
     }
     func restore() {

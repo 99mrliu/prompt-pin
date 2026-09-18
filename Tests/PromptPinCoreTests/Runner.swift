@@ -18,6 +18,10 @@ func expectTrue(_ value: @autoclosure () throws -> Bool, file: StaticString = #f
 func expectNil<T>(_ value: @autoclosure () throws -> T?, file: StaticString = #filePath, line: UInt = #line) throws {
     guard try value() == nil else { throw CheckFailure(description: "\(file):\(line): expected nil") }
 }
+func expectNotNil<T>(_ value: @autoclosure () throws -> T?, file: StaticString = #filePath, line: UInt = #line) throws -> T {
+    guard let value = try value() else { throw CheckFailure(description: "\(file):\(line): expected non-nil") }
+    return value
+}
 
 @main enum CoreChecks {
     static func main() throws {
@@ -28,7 +32,9 @@ func expectNil<T>(_ value: @autoclosure () throws -> T?, file: StaticString = #f
             ("Reject dangling references and duplicate IDs", tests.testRejectsDanglingReferencesAndDuplicates),
             ("Protect future-version data", tests.testFutureVersionDoesNotGetOverwritten),
             ("Empty library and missing file", tests.testEmptyLibraryAndMissingFile),
-            ("Failed save leaves existing data intact", tests.testFailedSavePreservesExistingData)
+            ("Failed save leaves existing data intact", tests.testFailedSavePreservesExistingData),
+            ("Legacy file without credential keys decodes with empty lists", tests.testLegacyFileWithoutCredentialKeysDecodesWithEmptyLists),
+            ("Credentials persist round trip and validate", tests.testCredentialsPersistRoundTripAndValidate)
         ]
         for (name, check) in checks { try check(); print("PASS: \(name)") }
         print("All \(checks.count) core checks passed.")

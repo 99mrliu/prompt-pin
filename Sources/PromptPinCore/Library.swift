@@ -19,11 +19,63 @@ public struct Prompt: Identifiable, Codable, Equatable {
     }
 }
 
+public struct AccountCredential: Identifiable, Codable, Equatable {
+    public var id: UUID
+    public var title: String
+    public var mainAccount: String
+    public var subAccount: String
+    public var password: String
+    public var updatedAt: Date
+    public init(id: UUID = UUID(), title: String, mainAccount: String = "", subAccount: String, password: String, updatedAt: Date = Date()) {
+        self.id = id; self.title = title; self.mainAccount = mainAccount
+        self.subAccount = subAccount; self.password = password; self.updatedAt = updatedAt
+    }
+}
+
+public enum SecretKind: String, Codable, Equatable {
+    case accessKeys
+    case apiKey
+}
+
+public struct SecretRecord: Identifiable, Codable, Equatable {
+    public var id: UUID
+    public var kind: SecretKind
+    public var title: String
+    public var mainAccount: String
+    public var subAccount: String
+    public var accessKey: String
+    public var secretKey: String
+    public var model: String
+    public var apiKey: String
+    public var baseURL: String
+    public var updatedAt: Date
+    public init(id: UUID = UUID(), kind: SecretKind, title: String, mainAccount: String = "", subAccount: String = "", accessKey: String = "", secretKey: String = "", model: String = "", apiKey: String = "", baseURL: String = "", updatedAt: Date = Date()) {
+        self.id = id; self.kind = kind; self.title = title; self.mainAccount = mainAccount
+        self.subAccount = subAccount; self.accessKey = accessKey; self.secretKey = secretKey
+        self.model = model; self.apiKey = apiKey; self.baseURL = baseURL; self.updatedAt = updatedAt
+    }
+}
+
 public struct Library: Codable, Equatable {
     public var version: Int = 1
     public var projects: [Project]
     public var prompts: [Prompt]
+    public var accounts: [AccountCredential] = []
+    public var secrets: [SecretRecord] = []
     public init(projects: [Project], prompts: [Prompt]) { self.projects = projects; self.prompts = prompts }
+    public init(projects: [Project], prompts: [Prompt], accounts: [AccountCredential], secrets: [SecretRecord]) {
+        self.projects = projects; self.prompts = prompts; self.accounts = accounts; self.secrets = secrets
+    }
+    // Credentials were added later; missing keys in older files decode as empty lists.
+    public enum CodingKeys: String, CodingKey { case version, projects, prompts, accounts, secrets }
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        version = try container.decode(Int.self, forKey: .version)
+        projects = try container.decode([Project].self, forKey: .projects)
+        prompts = try container.decode([Prompt].self, forKey: .prompts)
+        accounts = try container.decodeIfPresent([AccountCredential].self, forKey: .accounts) ?? []
+        secrets = try container.decodeIfPresent([SecretRecord].self, forKey: .secrets) ?? []
+    }
     public static var starter: Library {
         let writing = Project(name: "日常写作")
         let code = Project(name: "代码助手")
@@ -37,10 +89,24 @@ public struct Library: Codable, Equatable {
     public func validated() throws -> Library {
         guard version == 1 else { throw LibraryError.invalid("无法读取此版本的数据，请升级应用。") }
         let ids = Set(projects.map(\.id))
+        let accountIDs = Set(accounts.map(\.id))
+        let secretIDs = Set(secrets.map(\.id))
+        let trimmedNonEmpty = { (value: String) in !value.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        let secretsValid = secrets.allSatisfy { record in
+            guard trimmedNonEmpty(record.title) else { return false }
+            switch record.kind {
+            case .accessKeys: return trimmedNonEmpty(record.subAccount) && trimmedNonEmpty(record.accessKey) && trimmedNonEmpty(record.secretKey)
+            case .apiKey: return trimmedNonEmpty(record.apiKey)
+            }
+        }
         guard ids.count == projects.count,
               Set(prompts.map(\.id)).count == prompts.count,
+              accountIDs.count == accounts.count,
+              secretIDs.count == secrets.count,
               projects.allSatisfy({ !$0.name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
-              prompts.allSatisfy({ ids.contains($0.projectID) && !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+              prompts.allSatisfy({ ids.contains($0.projectID) && !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.body.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+              accounts.allSatisfy({ !$0.title.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.subAccount.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && !$0.password.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }),
+              secretsValid
         else { throw LibraryError.invalid("数据包含重复标识、空内容或不存在的项目。") }
         return self
     }
