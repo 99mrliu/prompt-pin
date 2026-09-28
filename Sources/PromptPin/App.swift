@@ -10,6 +10,7 @@ import SwiftUI
     private var item: NSStatusItem!
     private let popover = NSPopover()
     private let store = Store()
+    private let preview = ProcessInfo.processInfo.environment["PROMPT_PIN_UI_PREVIEW"] == "1"
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Avoid two menu-bar instances editing the same library.
         if let identifier = Bundle.main.bundleIdentifier,
@@ -25,10 +26,10 @@ import SwiftUI
             button.target = self; button.action = #selector(toggle)
         }
         popover.contentSize = NSSize(width: 780, height: 580)
-        popover.behavior = .transient
+        popover.behavior = preview ? .applicationDefined : .transient
         popover.animates = true
         popover.contentViewController = NSHostingController(rootView: LibraryView(store: store))
-        store.holdOpen = { [weak self] hold in self?.popover.behavior = hold ? .applicationDefined : .transient }
+        store.holdOpen = { [weak self] hold in self?.popover.behavior = (hold || self?.preview == true) ? .applicationDefined : .transient }
         if CommandLine.arguments.contains("--show") { toggle() }
     }
     @objc private func toggle() {

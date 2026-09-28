@@ -1,4 +1,5 @@
 import Foundation
+import PromptPinCore
 
 // A framework-free test runner also works with Apple's Command Line Tools,
 // which do not ship XCTest. Any failed assertion returns a nonzero exit code.
@@ -34,9 +35,34 @@ func expectNotNil<T>(_ value: @autoclosure () throws -> T?, file: StaticString =
             ("Empty library and missing file", tests.testEmptyLibraryAndMissingFile),
             ("Failed save leaves existing data intact", tests.testFailedSavePreservesExistingData),
             ("Legacy file without credential keys decodes with empty lists", tests.testLegacyFileWithoutCredentialKeysDecodesWithEmptyLists),
-            ("Credentials persist round trip and validate", tests.testCredentialsPersistRoundTripAndValidate)
+            ("Credentials persist round trip and validate", tests.testCredentialsPersistRoundTripAndValidate),
+            ("Legacy credentials survive schema upgrade without value changes", tests.testLegacyCredentialsSurviveMetadataUpgrade),
+            ("Optional relationships and every credential format", tests.testOptionalAccountRelationshipsAndAllSecretKinds),
+            ("Memo persistence and non-destructive import merge", tests.testMemoMergePreservesExistingRecords)
         ]
         for (name, check) in checks { try check(); print("PASS: \(name)") }
         print("All \(checks.count) core checks passed.")
+        if CommandLine.arguments.count == 2 {
+            // Read-only validation of a user library. Never log names, values or keys.
+            let url = URL(fileURLWithPath: CommandLine.arguments[1])
+            let before = try Data(contentsOf: url)
+            let disk = LibraryDisk(directory: url.deletingLastPathComponent())
+            let decoded = try disk.decode(before)
+            let encoded = try disk.encode(decoded)
+            let source = try JSONSerialization.jsonObject(with: before) as! [String: Any]
+            let target = try JSONSerialization.jsonObject(with: encoded) as! [String: Any]
+            for collection in ["projects", "prompts", "accounts", "secrets", "memos"] {
+                let old = source[collection] as? [[String: Any]] ?? []
+                let new = target[collection] as? [[String: Any]] ?? []
+                try expectEqual(old.count, new.count)
+                for (a, b) in zip(old, new) {
+                    for (key, value) in a {
+                        try expectTrue(NSDictionary(dictionary: [key: value]).isEqual(to: [key: b[key] as Any]))
+                    }
+                }
+            }
+            try expectEqual(try Data(contentsOf: url), before)
+            print("PASS: Existing library read-only round-trip; every original field preserved; source untouched.")
+        }
     }
 }

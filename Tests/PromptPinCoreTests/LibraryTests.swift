@@ -98,4 +98,79 @@ final class LibraryTests {
         try expectThrows(try disk.save(incomplete))
         try expectEqual(try disk.load(), library)
     }
+    func testLegacyCredentialsSurviveMetadataUpgrade() throws {
+        let disk = try temporaryDisk()
+        let original = Library(projects: [], prompts: [], accounts: [AccountCredential(title: "Legacy", mainAccount: "owner", subAccount: "member", password: "  unchanged 密码\n")], secrets: [SecretRecord(kind: .accessKeys, title: "Bucket", mainAccount: "root", subAccount: "user", accessKey: "AK", secretKey: " SK\n", model: "keep-hidden", apiKey: "keep-hidden-key", baseURL: "https://example.invalid")])
+        var json = try JSONSerialization.jsonObject(with: disk.encode(original)) as! [String: Any]
+        json["version"] = 1; json.removeValue(forKey: "memos")
+        let legacy = try JSONSerialization.data(withJSONObject: json)
+        try legacy.write(to: disk.file)
+        var upgraded = try expectNotNil(try disk.load())
+        try expectEqual(try Data(contentsOf: disk.file), legacy)
+        try expectEqual(upgraded.accounts, original.accounts)
+        try expectEqual(upgraded.secrets, original.secrets)
+        try expectNil(upgraded.secrets[0].context)
+        var context = CredentialContext(); context.category = "对象存储 / 存储桶"; context.role = .standalone
+        upgraded.secrets[0].context = context
+        var primary = upgraded.accounts[0]
+        primary.username = primary.mainAccount
+        try expectEqual(primary.loginName, primary.mainAccount)
+        try expectEqual(primary.subAccount, upgraded.accounts[0].subAccount)
+        var normalized = upgraded.secrets[0]
+        normalized.username = ""; normalized.ownerAccount = ""; normalized.endpointURL = "https://storage.example.invalid"
+        try expectEqual(normalized.loginName, "")
+        try expectEqual(normalized.ownerName, "")
+        try expectEqual(normalized.endpoint, "https://storage.example.invalid")
+        try expectEqual(normalized.mainAccount, original.secrets[0].mainAccount)
+        try expectEqual(normalized.subAccount, original.secrets[0].subAccount)
+        try expectEqual(normalized.baseURL, original.secrets[0].baseURL)
+        var normalizedLibrary = upgraded; normalizedLibrary.secrets[0] = normalized
+        try expectEqual(try disk.decode(disk.encode(normalizedLibrary)), normalizedLibrary)
+        upgraded.memos = [Memo(title: "步骤", body: "第一步\n第二步")]
+        try disk.save(upgraded)
+        let reloaded = try expectNotNil(try disk.load())
+        try expectEqual(reloaded, upgraded)
+        try expectEqual(reloaded.accounts, original.accounts)
+        var withoutMetadata = reloaded.secrets[0]; withoutMetadata.context = nil
+        try expectEqual(withoutMetadata, original.secrets[0])
+        try expectEqual(try Data(contentsOf: disk.backup), legacy)
+    }
+    func testOptionalAccountRelationshipsAndAllSecretKinds() throws {
+        let disk = try temporaryDisk()
+        var library = Library(projects: [], prompts: [])
+        library.accounts = [AccountCredential(title: "密码", subAccount: "", password: "fixture-password")]
+        for kind in SecretKind.allCases {
+            var record = SecretRecord(kind: kind, title: kind.label, accessKey: "fixture-ak", secretKey: "fixture-sk", apiKey: "line 1\nline 2\n")
+            var context = CredentialContext(); context.resource = "bucket-name"; context.category = "对象存储 / 存储桶"
+            record.context = context
+            library.secrets.append(record)
+        }
+        try disk.save(library)
+        try expectEqual(try disk.load(), library)
+        for role in AccountRole.allCases {
+            library.secrets[0].context?.role = role
+            try disk.save(library)
+            try expectEqual(try disk.load(), library)
+        }
+    }
+    func testMemoMergePreservesExistingRecords() throws {
+        let disk = try temporaryDisk()
+        var existing = Library.starter
+        let memo = Memo(title: "已有记录", body: "不要覆盖\n中文")
+        existing.memos = [memo]
+        var incoming = existing
+        incoming.memos[0].body = "导入版本，不应该替换"
+        incoming.prompts[0].body = "不应该替换"
+        incoming.memos.append(Memo(title: "新记录", body: "新内容"))
+        let merged = existing.merging(incoming)
+        try expectEqual(merged.memos[0], memo)
+        try expectEqual(merged.prompts, existing.prompts)
+        try expectEqual(merged.memos.count, 2)
+        try expectEqual(merged.merging(incoming), merged)
+        try disk.save(merged)
+        try expectEqual(try disk.load(), merged)
+        var invalid = merged; invalid.memos.append(invalid.memos[0])
+        try expectThrows(try disk.save(invalid))
+    }
+
 }

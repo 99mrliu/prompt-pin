@@ -4,7 +4,7 @@ import PromptPinCore
 
 struct LibraryView: View {
     enum Pane: Equatable {
-        case allPrompts, pinned, accounts, secrets, project(UUID)
+        case allPrompts, pinned, accounts, secrets, memos, project(UUID)
     }
     @ObservedObject var store: Store
     @State private var pane: Pane = .allPrompts
@@ -12,6 +12,11 @@ struct LibraryView: View {
     @State private var draft: Prompt?
     @State private var accountDraft: AccountCredential?
     @State private var secretDraft: SecretRecord?
+    @State private var memoDraft: Memo?
+    @State private var deleteMemo: Memo?
+    @State private var categoryFilter = ""
+    @State private var roleFilter = ""
+    @State private var kindFilter: SecretKind?
     @State private var projectEditor = false
     @State private var projectToRename: Project?
     @State private var projectName = ""
@@ -33,13 +38,15 @@ struct LibraryView: View {
         case .pinned: return "常用置顶"
         case .accounts: return "账号密码"
         case .secrets: return "密钥"
+        case .memos: return "备忘录"
         case .project(let id): return store.library.projects.first { $0.id == id }?.name ?? "提示词"
         }
     }
     private var subtitle: String {
         switch pane {
-        case .accounts: return "主账号、子账号和密码，点击即可复制。"
-        case .secrets: return "AK/SK 与 API Key，打码保存，随用随取。"
+        case .accounts: return "账号关系与用途可选，按自己的习惯整理。"
+        case .secrets: return "按类型和用途整理，不必强行填写主子账号。"
+        case .memos: return "临时想法、操作步骤和日常记录，随手存好。"
         default: return "把重复留给收藏，把时间留给创造。"
         }
     }
@@ -57,20 +64,51 @@ struct LibraryView: View {
     private var visibleAccounts: [AccountCredential] {
         let keyword = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return store.library.accounts.filter { account in
-            keyword.isEmpty || account.title.localizedStandardContains(keyword)
+            matches(account.context) && (keyword.isEmpty || contextMatches(account.context, keyword) || account.title.localizedStandardContains(keyword)
                 || account.mainAccount.localizedStandardContains(keyword)
-                || account.subAccount.localizedStandardContains(keyword)
+                || account.loginName.localizedStandardContains(keyword))
         }.sorted { $0.updatedAt > $1.updatedAt }
     }
     private var visibleSecrets: [SecretRecord] {
         let keyword = query.trimmingCharacters(in: .whitespacesAndNewlines)
         return store.library.secrets.filter { record in
-            keyword.isEmpty || record.title.localizedStandardContains(keyword)
-                || record.mainAccount.localizedStandardContains(keyword)
-                || record.subAccount.localizedStandardContains(keyword)
+            matches(record.context) && (kindFilter == nil || record.kind == kindFilter) && (keyword.isEmpty || contextMatches(record.context, keyword) || record.title.localizedStandardContains(keyword)
+                || record.ownerName.localizedStandardContains(keyword)
+                || record.loginName.localizedStandardContains(keyword)
                 || record.accessKey.localizedStandardContains(keyword)
-                || record.apiKey.localizedStandardContains(keyword)
+                || record.apiKey.localizedStandardContains(keyword))
         }.sorted { $0.updatedAt > $1.updatedAt }
+    }
+    private var visibleMemos: [Memo] {
+        let keyword = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        return store.library.memos.filter { keyword.isEmpty || $0.title.localizedStandardContains(keyword) || $0.body.localizedStandardContains(keyword) }.sorted { $0.updatedAt > $1.updatedAt }
+    }
+    private func matches(_ context: CredentialContext?) -> Bool {
+        (categoryFilter.isEmpty || context?.category == categoryFilter) &&
+        (roleFilter.isEmpty || (context?.role?.rawValue ?? "unspecified") == roleFilter)
+    }
+    private func contextMatches(_ context: CredentialContext?, _ keyword: String) -> Bool {
+        guard let context else { return false }
+        return [context.category, context.resource, context.notes, context.role?.label ?? ""].contains { $0.localizedStandardContains(keyword) }
+    }
+    private var credentialFilters: some View {
+        HStack(spacing: 10) {
+            Picker("用途", selection: $categoryFilter) {
+                Text("全部用途").tag("")
+                ForEach(Array(Set((store.library.accounts.compactMap { $0.context?.category } + store.library.secrets.compactMap { $0.context?.category }).filter { !$0.isEmpty })).sorted(), id: \.self) { Text($0).tag($0) }
+            }
+            Picker("关系", selection: $roleFilter) {
+                Text("全部关系").tag("")
+                Text("未指定").tag("unspecified")
+                ForEach(AccountRole.allCases, id: \.self) { Text($0.label).tag($0.rawValue) }
+            }
+            if pane == .secrets {
+                Picker("类型", selection: $kindFilter) {
+                    Text("全部类型").tag(Optional<SecretKind>.none)
+                    ForEach(SecretKind.allCases, id: \.self) { Text($0.label).tag(Optional($0)) }
+                }
+            }
+        }.labelsHidden().font(.system(size: 11)).padding(.horizontal, 26).padding(.bottom, 12)
     }
     var body: some View {
         HStack(spacing: 0) {
@@ -79,6 +117,7 @@ struct LibraryView: View {
             VStack(alignment: .leading, spacing: 0) {
                 header
                 search.padding(.horizontal, 26).padding(.bottom, 18)
+                if pane == .accounts || pane == .secrets { credentialFilters }
                 if store.isLocked { recovery }
                 else if mainList.isEmpty { emptyState }
                 else {
@@ -103,8 +142,9 @@ struct LibraryView: View {
             AccountEditor(store: store, original: account) { accountDraft = nil }
         }
         .sheet(item: $secretDraft) { secret in
-            SecretEditor(store: store, original: secret, kindLocked: store.library.secrets.contains { $0.id == secret.id }) { secretDraft = nil }
+            SecretEditor(store: store, original: secret) { secretDraft = nil }
         }
+        .sheet(item: $memoDraft) { memo in MemoEditor(store: store, original: memo) { memoDraft = nil } }
         .sheet(isPresented: $projectEditor) { projectForm }
         .alert("无法完成操作", isPresented: Binding(get: { store.error != nil }, set: { if !$0 { store.error = nil } })) {
             Button("知道了") { store.error = nil }
@@ -144,11 +184,20 @@ struct LibraryView: View {
                 deleteSecret = nil
             }
         } message: { Text("“\(deleteSecret?.title ?? "")”将从密钥库中移除。建议确认已有其他地方留存。") }
-        .onChange(of: draft != nil || projectEditor || accountDraft != nil || secretDraft != nil) { store.holdOpen?($0) }
+        .alert("删除这条备忘录？", isPresented: Binding(get: { deleteMemo != nil }, set: { if !$0 { deleteMemo = nil } })) {
+            Button("取消", role: .cancel) { deleteMemo = nil }
+            Button("删除", role: .destructive) {
+                if let memo = deleteMemo { store.update { $0.memos.removeAll { $0.id == memo.id } } }
+                deleteMemo = nil
+            }
+        } message: { Text("这条备忘录将从本机资料库中移除。") }
+        .onChange(of: pane) { _ in query = ""; categoryFilter = ""; roleFilter = ""; kindFilter = nil; revealed.removeAll() }
+        .onChange(of: draft != nil || projectEditor || accountDraft != nil || secretDraft != nil || memoDraft != nil) { store.holdOpen?($0) }
     }
 
     private var mainList: [CardItem] {
         switch pane {
+        case .memos: return visibleMemos.map { CardItem(id: $0.id, kind: .memo($0)) }
         case .accounts: return visibleAccounts.map { CardItem(id: $0.id, kind: .account($0)) }
         case .secrets: return visibleSecrets.map { CardItem(id: $0.id, kind: .secret($0)) }
         default: return visiblePrompts.map { CardItem(id: $0.id, kind: .prompt($0)) }
@@ -159,6 +208,7 @@ struct LibraryView: View {
             case prompt(Prompt)
             case account(AccountCredential)
             case secret(SecretRecord)
+            case memo(Memo)
         }
         let id: UUID
         let kind: Content
@@ -168,6 +218,7 @@ struct LibraryView: View {
         case .prompt(let prompt): promptCard(prompt)
         case .account(let account): accountCard(account)
         case .secret(let secret): secretCard(secret)
+        case .memo(let memo): memoCard(memo)
         }
     }
 
@@ -207,7 +258,7 @@ struct LibraryView: View {
                         }
                     }
                     HStack {
-                        Text("账号密钥").font(.system(size: 10, weight: .medium)).foregroundStyle(Theme.muted)
+                        Text("随身资料").font(.system(size: 10, weight: .medium)).foregroundStyle(Theme.muted)
                         Spacer()
                     }.padding(.top, 18).padding(.bottom, 4)
                     navigationRow("账号密码", icon: "person.crop.circle", count: store.library.accounts.count, active: pane == .accounts) {
@@ -216,6 +267,7 @@ struct LibraryView: View {
                     navigationRow("密钥", icon: "key", count: store.library.secrets.count, active: pane == .secrets) {
                         pane = .secrets
                     }
+                    navigationRow("备忘录", icon: "note.text", count: store.library.memos.count, active: pane == .memos) { pane = .memos }
                 }.padding(.horizontal, 12)
             }
             VStack(alignment: .leading, spacing: 10) {
@@ -265,11 +317,13 @@ struct LibraryView: View {
         switch pane {
         case .accounts: return "新建账号"
         case .secrets: return "新建密钥"
+        case .memos: return "新建备忘录"
         default: return "新建提示词"
         }
     }
     private func newItem() {
         switch pane {
+        case .memos: memoDraft = Memo()
         case .accounts:
             accountDraft = AccountCredential(title: "", subAccount: "", password: "")
         case .secrets:
@@ -299,7 +353,8 @@ struct LibraryView: View {
     private var searchPlaceholder: String {
         switch pane {
         case .accounts: return "搜索备注名或账号…"
-        case .secrets: return "搜索备注名或密钥…"
+        case .secrets: return "搜索名称、用途、资源或账号…"
+        case .memos: return "搜索备忘录标题或正文…"
         default: return "搜索标题、内容或项目…"
         }
     }
@@ -360,22 +415,26 @@ struct LibraryView: View {
                 Menu {
                     Button("编辑账号") { accountDraft = account }
                     Button("复制一份") {
-                        accountDraft = AccountCredential(title: account.title + " · 副本", mainAccount: account.mainAccount, subAccount: account.subAccount, password: account.password)
+                        var duplicate = account; duplicate.id = UUID(); duplicate.title += " · 副本"; accountDraft = duplicate
                     }
                     Divider()
                     Button("删除…", role: .destructive) { deleteAccount = account }
                 } label: { Image(systemName: "ellipsis").font(.system(size: 13)) }
                     .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("账号操作")
             }
+            contextSummary(account.context)
             Button { accountDraft = account } label: {
                 Text(account.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.ink).lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain).help("查看与编辑账号")
             VStack(alignment: .leading, spacing: 7) {
-                if !account.mainAccount.isEmpty {
+                if let resource = account.context?.resource, !resource.isEmpty {
+                    credentialRow("资源 / 项目", value: resource, recordID: account.id, field: "account-\(account.id)-resource")
+                }
+                if !account.mainAccount.isEmpty && !(account.context?.role == .primary && account.mainAccount == account.loginName) {
                     credentialRow("主账号", value: account.mainAccount, recordID: account.id, field: "account-\(account.id)-main")
                 }
-                credentialRow("子账号（用户）", value: account.subAccount, recordID: account.id, field: "account-\(account.id)-sub")
+                if !account.loginName.isEmpty { credentialRow((account.context ?? CredentialContext()).usernameLabel, value: account.loginName, recordID: account.id, field: "account-\(account.id)-sub") }
                 credentialRow("密码", value: account.password, isSecret: true, recordID: account.id, field: "account-\(account.id)-password")
             }
         }.padding(17).background(.white, in: RoundedRectangle(cornerRadius: 15))
@@ -385,7 +444,7 @@ struct LibraryView: View {
     private func secretCard(_ secret: SecretRecord) -> some View {
         VStack(alignment: .leading, spacing: 11) {
             HStack(spacing: 8) {
-                Text(secret.kind == .accessKeys ? "AK / SK" : "API Key").font(.system(size: 10, weight: .medium))
+                Text(secret.kind.label).font(.system(size: 10, weight: .medium))
                     .foregroundStyle(Theme.green).padding(.horizontal, 8).padding(.vertical, 4)
                     .background(Theme.mint.opacity(0.6), in: RoundedRectangle(cornerRadius: 5))
                 Spacer()
@@ -402,30 +461,67 @@ struct LibraryView: View {
                 } label: { Image(systemName: "ellipsis").font(.system(size: 13)) }
                     .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("密钥操作")
             }
+            contextSummary(secret.context)
             Button { secretDraft = secret } label: {
                 Text(secret.title).font(.system(size: 15, weight: .semibold)).foregroundStyle(Theme.ink).lineLimit(1)
                     .frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
             }.buttonStyle(.plain).help("查看与编辑密钥")
             VStack(alignment: .leading, spacing: 7) {
+                if let resource = secret.context?.resource, !resource.isEmpty {
+                    credentialRow("资源 / Bucket", value: resource, recordID: secret.id, field: "secret-\(secret.id)-resource")
+                }
+                if !secret.ownerName.isEmpty {
+                    credentialRow("所属主账号", value: secret.ownerName, recordID: secret.id, field: "secret-\(secret.id)-main")
+                }
+                if !secret.loginName.isEmpty {
+                    credentialRow((secret.context ?? CredentialContext()).usernameLabel, value: secret.loginName, recordID: secret.id, field: "secret-\(secret.id)-sub")
+                }
                 if secret.kind == .accessKeys {
-                    if !secret.mainAccount.isEmpty {
-                        credentialRow("主账号", value: secret.mainAccount, recordID: secret.id, field: "secret-\(secret.id)-main")
-                    }
-                    credentialRow("子账号（用户）", value: secret.subAccount, recordID: secret.id, field: "secret-\(secret.id)-sub")
                     credentialRow("AK", value: secret.accessKey, recordID: secret.id, field: "secret-\(secret.id)-ak")
                     credentialRow("SK", value: secret.secretKey, isSecret: true, recordID: secret.id, field: "secret-\(secret.id)-sk")
+                    if !secret.endpoint.isEmpty { credentialRow("Endpoint", value: secret.endpoint, recordID: secret.id, field: "secret-\(secret.id)-baseurl") }
                 } else {
                     if !secret.model.isEmpty {
                         credentialRow("Model", value: secret.model, recordID: secret.id, field: "secret-\(secret.id)-model")
                     }
-                    credentialRow("API Key", value: secret.apiKey, isSecret: true, recordID: secret.id, field: "secret-\(secret.id)-apikey")
-                    if !secret.baseURL.isEmpty {
-                        credentialRow("Base URL", value: secret.baseURL, recordID: secret.id, field: "secret-\(secret.id)-baseurl")
+                    credentialRow(secret.kind.label, value: secret.apiKey, isSecret: true, recordID: secret.id, field: "secret-\(secret.id)-apikey")
+                    if !secret.endpoint.isEmpty {
+                        credentialRow("Base URL", value: secret.endpoint, recordID: secret.id, field: "secret-\(secret.id)-baseurl")
                     }
                 }
             }
         }.padding(17).background(.white, in: RoundedRectangle(cornerRadius: 15))
             .overlay(RoundedRectangle(cornerRadius: 15).stroke(Theme.line.opacity(0.75), lineWidth: 1))
+    }
+
+    @ViewBuilder private func contextSummary(_ context: CredentialContext?) -> some View {
+        if let context {
+            let summary = [context.category, context.role?.label ?? ""].filter { !$0.isEmpty }.joined(separator: " · ")
+            if !summary.isEmpty { Text(summary).font(.system(size: 10)).foregroundStyle(Theme.muted).lineLimit(2) }
+        }
+    }
+    private func memoCard(_ memo: Memo) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Button { memoDraft = memo } label: { Text(memo.title).font(.system(size: 15, weight: .semibold)) }.buttonStyle(.plain)
+                Spacer()
+                Menu {
+                    Button("编辑备忘录") { memoDraft = memo }
+                    Button("删除…", role: .destructive) { deleteMemo = memo }
+                } label: { Image(systemName: "ellipsis") }.menuStyle(.borderlessButton).fixedSize().accessibilityLabel("备忘录操作")
+            }
+            Button { memoDraft = memo } label: {
+                Text(memo.body).font(.system(size: 12)).foregroundStyle(Theme.muted).lineLimit(4).frame(maxWidth: .infinity, alignment: .leading).contentShape(Rectangle())
+            }.buttonStyle(.plain)
+            HStack {
+                Text(memo.updatedAt, style: .date).font(.system(size: 10)).foregroundStyle(Theme.muted)
+                Spacer()
+                Button { copyValue(memo.body, key: "memo-\(memo.id)") } label: {
+                    Label(copiedKey == "memo-\(memo.id)" ? "已复制" : "复制内容", systemImage: "doc.on.doc")
+                }.buttonStyle(SpringButton())
+            }
+        }.padding(17).background(.white, in: RoundedRectangle(cornerRadius: 15))
+            .overlay(RoundedRectangle(cornerRadius: 15).stroke(Theme.line))
     }
 
     private func credentialRow(_ label: String, value: String, isSecret: Bool = false, recordID: UUID, field: String) -> some View {
@@ -476,12 +572,18 @@ struct LibraryView: View {
         switch pane {
         case .accounts: return "\(visibleAccounts.count) 个账号"
         case .secrets: return "\(visibleSecrets.count) 个密钥"
+        case .memos: return "\(visibleMemos.count) 条备忘录"
         default: return "\(visiblePrompts.count) 条提示词 · 点击卡片编辑"
         }
     }
 
     private var emptyState: some View {
         switch pane {
+        case .memos: return AnyView(VStack(spacing: 16) {
+            Image(systemName: "note.text").font(.largeTitle).foregroundStyle(Theme.green)
+            Text(query.isEmpty ? "记下此刻想到的" : "没有找到相关备忘录").font(.headline)
+            Button(query.isEmpty ? "新建备忘录" : "清除搜索") { if query.isEmpty { newItem() } else { query = "" } }.buttonStyle(SpringButton())
+        }.frame(maxWidth: .infinity, maxHeight: .infinity))
         case .accounts: return AnyView(accountEmptyState)
         case .secrets: return AnyView(secretEmptyState)
         default: return AnyView(promptEmptyState)
@@ -503,11 +605,11 @@ struct LibraryView: View {
     private var accountEmptyState: some View {
         VStack(spacing: 14) {
             Image(systemName: query.isEmpty ? "person.crop.circle.badge.plus" : "magnifyingglass").font(.system(size: 32, weight: .light)).foregroundStyle(Theme.green)
-            Text(query.isEmpty ? "收好第一个账号" : "没有找到相关账号").font(.system(size: 17, weight: .semibold))
-            Text(query.isEmpty ? "主账号可选，填好子账号和密码，之后一键复制。" : "试试更短的关键词。")
+            Text(store.library.accounts.isEmpty ? "收好第一个账号" : "没有找到相关账号").font(.system(size: 17, weight: .semibold))
+            Text(query.isEmpty ? "名称和密码必填，账号关系、用户名与用途均可选。" : "试试更短的关键词。")
                 .font(.system(size: 12)).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
-            if !query.isEmpty {
-                Button("清除筛选") { query = "" }.buttonStyle(SpringButton())
+            if !query.isEmpty || !categoryFilter.isEmpty || !roleFilter.isEmpty || kindFilter != nil {
+                Button("清除筛选") { query = ""; categoryFilter = ""; roleFilter = ""; kindFilter = nil }.buttonStyle(SpringButton())
             } else {
                 Button("新建账号", action: newItem).buttonStyle(SpringButton(filled: true))
             }
@@ -516,11 +618,11 @@ struct LibraryView: View {
     private var secretEmptyState: some View {
         VStack(spacing: 14) {
             Image(systemName: query.isEmpty ? "key.fill" : "magnifyingglass").font(.system(size: 32, weight: .light)).foregroundStyle(Theme.green)
-            Text(query.isEmpty ? "收好第一个密钥" : "没有找到相关密钥").font(.system(size: 17, weight: .semibold))
-            Text(query.isEmpty ? "支持 AK/SK 和大模型常用的 API Key，卡片上默认打码。" : "试试更短的关键词。")
+            Text(store.library.secrets.isEmpty ? "收好第一个密钥" : "没有找到相关密钥").font(.system(size: 17, weight: .semibold))
+            Text(query.isEmpty ? "支持 AK/SK、API Key、Token、SSH、证书及自定义凭据。" : "试试更短的关键词。")
                 .font(.system(size: 12)).foregroundStyle(Theme.muted).multilineTextAlignment(.center)
-            if !query.isEmpty {
-                Button("清除筛选") { query = "" }.buttonStyle(SpringButton())
+            if !query.isEmpty || !categoryFilter.isEmpty || !roleFilter.isEmpty || kindFilter != nil {
+                Button("清除筛选") { query = ""; categoryFilter = ""; roleFilter = ""; kindFilter = nil }.buttonStyle(SpringButton())
             } else {
                 Button("新建密钥", action: newItem).buttonStyle(SpringButton(filled: true))
             }
