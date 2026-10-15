@@ -1,6 +1,7 @@
 import AppKit
 import SwiftUI
 import Carbon.HIToolbox
+import PromptPinCore
 
 @main struct PromptPinApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) var delegate
@@ -72,6 +73,14 @@ import Carbon.HIToolbox
     /// Debug-only end-to-end check without Accessibility permission: posts key events to our own
     /// process. The pasteboard must already contain the search query; asserts the copied hit value.
     private func runQuickSearchSelfTest() {
+        guard let dataDirectory = ProcessInfo.processInfo.environment["PROMPT_PIN_DATA_DIR"],
+              !dataDirectory.isEmpty,
+              URL(fileURLWithPath: dataDirectory, isDirectory: true).standardizedFileURL.resolvingSymlinksInPath()
+                != LibraryDisk.standard.directory.standardizedFileURL.resolvingSymlinksInPath(),
+              store.library.prompts.contains(where: { $0.body.contains("COPIED_BODY_MARKER_9f3k") }) else {
+            print("SELFTEST FAIL: an isolated PROMPT_PIN_DATA_DIR with the synthetic fixture is required")
+            exit(1)
+        }
         let snapshotDir = ProcessInfo.processInfo.environment["PROMPT_PIN_SNAPSHOT_DIR"] ?? "/tmp"
         quickSearch?.show()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
@@ -90,7 +99,7 @@ import Carbon.HIToolbox
                 print("SELFTEST PASS: panel, paste, search and copy-on-return work")
                 exit(0)
             }
-            print("SELFTEST FAIL: pasteboard is \"\(result)\"")
+            print("SELFTEST FAIL: copied value did not match the synthetic fixture (clipboard content omitted)")
             exit(1)
         }
     }

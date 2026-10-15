@@ -3,3 +3,23 @@ dist/
 .DS_Store
 .swiftpm/
 *.xcuserstate
+
+# Local editor settings and diagnostics
+.idea/
+*.log
+
+# Local credentials and signing material
+.env
+.env.*
+!.env.example
+!.env.sample
+*.pem
+*.key
+*.p12
+*.pfx
+
+# Personal libraries, automatic backups and exported backups
+library.json
+library.backup.json
+library.unreadable-*.json
+PromptPin-*.json
