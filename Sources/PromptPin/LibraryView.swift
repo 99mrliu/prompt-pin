@@ -282,6 +282,10 @@ struct LibraryView: View {
                 .padding(14)
             HStack {
                 Menu {
+                    Button("快速搜索  ⌥⌘P / ⌃⌘P") {
+                        NotificationCenter.default.post(name: .promptPinPresentQuickSearch, object: nil)
+                    }
+                    Divider()
                     Button("导出备份…") { store.exportLibrary() }.disabled(store.isLocked)
                     Button("导入备份（合并）…") { store.importLibrary() }.disabled(store.isLocked)
                     Button("打开数据文件夹") { store.revealData() }

@@ -153,6 +153,77 @@ final class LibraryTests {
             try expectEqual(try disk.load(), library)
         }
     }
+    private func makeQuickSearchLibrary() -> Library {
+        let project = Project(name: "搜索验证项目")
+        var prompt = Prompt(projectID: project.id, title: "独特标题Alpha", body: "正文含共享关键词斑马")
+        prompt.updatedAt = Date(timeIntervalSince1970: 100)
+        var account = AccountCredential(title: "账号Beta", subAccount: "", password: "PW-COPY-VALUE")
+        var accountContext = CredentialContext()
+        accountContext.resource = "神秘资源词"
+        accountContext.category = "云平台"
+        account.context = accountContext
+        account.updatedAt = Date(timeIntervalSince1970: 200)
+        var accessKeySecret = SecretRecord(kind: .accessKeys, title: "AK密钥Gamma", accessKey: "AKID-X", secretKey: "SK-COPY-VALUE")
+        accessKeySecret.updatedAt = Date(timeIntervalSince1970: 300)
+        var apiSecret = SecretRecord(kind: .apiKey, title: "API密钥Delta", apiKey: "API-COPY-VALUE")
+        apiSecret.updatedAt = Date(timeIntervalSince1970: 400)
+        var memo = Memo(title: "备忘录Epsilon", body: "memo内容词")
+        memo.updatedAt = Date(timeIntervalSince1970: 500)
+        var library = Library(projects: [project], prompts: [prompt], accounts: [account], secrets: [accessKeySecret, apiSecret])
+        library.memos = [memo]
+        return library
+    }
+
+    func testQuickSearchEmptyQueryReturnsRecentFirst() throws {
+        let library = makeQuickSearchLibrary()
+        let hits = QuickSearchIndex.hits(in: library, query: "  ")
+        try expectEqual(hits.count, 5)
+        try expectTrue(zip(hits, hits.dropFirst()).allSatisfy { $0.updatedAt >= $1.updatedAt })
+        try expectEqual(hits.first?.kind, .memo)
+        try expectEqual(hits.first?.title, "备忘录Epsilon")
+    }
+
+    func testQuickSearchMatchesAllKindsAndPicksCopyValue() throws {
+        let library = makeQuickSearchLibrary()
+        let promptHits = QuickSearchIndex.hits(in: library, query: "斑马")
+        try expectEqual(promptHits.count, 1)
+        try expectEqual(promptHits[0].kind, .prompt)
+        try expectEqual(promptHits[0].copyText, "正文含共享关键词斑马")
+        try expectEqual(promptHits[0].subtitle, "搜索验证项目")
+
+        let accountHits = QuickSearchIndex.hits(in: library, query: "神秘资源词")
+        try expectEqual(accountHits.count, 1)
+        try expectEqual(accountHits[0].kind, .account)
+        try expectEqual(accountHits[0].copyText, "PW-COPY-VALUE")
+
+        let akHits = QuickSearchIndex.hits(in: library, query: "Gamma")
+        try expectEqual(akHits.count, 1)
+        try expectEqual(akHits[0].kind, .secret)
+        try expectEqual(akHits[0].copyText, "SK-COPY-VALUE")
+        try expectEqual(akHits[0].actionLabel, "复制 SK")
+
+        let apiHits = QuickSearchIndex.hits(in: library, query: "Delta")
+        try expectEqual(apiHits.count, 1)
+        try expectEqual(apiHits[0].copyText, "API-COPY-VALUE")
+        try expectEqual(apiHits[0].actionLabel, "复制密钥")
+
+        let memoHits = QuickSearchIndex.hits(in: library, query: "memo内容词")
+        try expectEqual(memoHits.count, 1)
+        try expectEqual(memoHits[0].kind, .memo)
+        try expectEqual(memoHits[0].copyText, "memo内容词")
+
+        try expectEqual(QuickSearchIndex.hits(in: library, query: "不存在的词xyz").count, 0)
+    }
+
+    func testQuickSearchHonorsLimitAndPersistsFixture() throws {
+        let disk = try temporaryDisk()
+        let library = makeQuickSearchLibrary()
+        try disk.save(library)
+        try expectEqual(try disk.load(), library)
+        try expectEqual(QuickSearchIndex.hits(in: library, query: "", limit: 2).count, 2)
+        try expectEqual(QuickSearchIndex.hits(in: library, query: "", limit: 99).count, 5)
+    }
+
     func testMemoMergePreservesExistingRecords() throws {
         let disk = try temporaryDisk()
         var existing = Library.starter

@@ -38,6 +38,9 @@ func expectNotNil<T>(_ value: @autoclosure () throws -> T?, file: StaticString =
             ("Credentials persist round trip and validate", tests.testCredentialsPersistRoundTripAndValidate),
             ("Legacy credentials survive schema upgrade without value changes", tests.testLegacyCredentialsSurviveMetadataUpgrade),
             ("Optional relationships and every credential format", tests.testOptionalAccountRelationshipsAndAllSecretKinds),
+            ("Quick search empty query lists recently edited first", tests.testQuickSearchEmptyQueryReturnsRecentFirst),
+            ("Quick search matches all kinds and picks copy value", tests.testQuickSearchMatchesAllKindsAndPicksCopyValue),
+            ("Quick search honors limit with a valid fixture", tests.testQuickSearchHonorsLimitAndPersistsFixture),
             ("Memo persistence and non-destructive import merge", tests.testMemoMergePreservesExistingRecords)
         ]
         for (name, check) in checks { try check(); print("PASS: \(name)") }
